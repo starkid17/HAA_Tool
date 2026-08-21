@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deriv Live Digit Intelligence App</title>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: #131b2e;
+            --accent-blue: #3b82f6;
+            --success-green: #10b981;
+            --danger-red: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg-color); color: var(--text-main); padding: 15px; margin: 0; }
+        h2 { color: var(--accent-blue); font-size: 18px; text-align: center; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; }
+        .card { background: var(--card-bg); padding: 16px; border-radius: 12px; margin-bottom: 15px; border: 1px solid #1e293b; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); }
+        label { display: block; margin-top: 8px; font-size: 12px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; }
+        select { width: 100%; padding: 12px; margin-top: 6px; background: #1e293b; border: 1px solid #334155; color: #fff; border-radius: 8px; box-sizing: border-box; font-size: 14px; outline: none; }
+        .btn-group { display: flex; gap: 12px; margin-top: 15px; }
+        button { flex: 1; padding: 12px; font-weight: bold; border-radius: 8px; cursor: pointer; border: none; font-size: 14px; }
+        .btn-start { background: var(--success-green); color: #fff; }
+        .btn-stop { background: var(--danger-red); color: #fff; }
+        
+        /* Rankings Table Styles */
+        .ranking-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; }
+        .rank-item { background: #1e293b; padding: 10px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #334155; }
+        .rank-item.hot { border-color: var(--success-green); background: #064e3b33; }
+        .digit-num { font-size: 18px; font-weight: bold; color: var(--text-main); }
+        .digit-pct { font-size: 14px; color: #fbbf24; font-weight: bold; }
+        
+        .status-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; background: #334155; color: #fff; }
+        .log-box { background: #070a12; padding: 10px; font-family: monospace; font-size: 11px; height: 100px; overflow-y: scroll; border-radius: 8px; border: 1px solid #1e293b; color: #38bdf8; margin-top: 10px;}
+    </style>
+</head>
+<body>
+
+    <h2>Digit Intelligence Suite</h2>
+
+    <div class="card">
+        <label>Select Market Feed</label>
+        <select id="symbol">
+            <option value="R_100">Volatility 100 Index</option>
+            <option value="R_75">Volatility 75 Index</option>
+            <option value="R_50">Volatility 50 Index</option>
+            <option value="R_25">Volatility 25 Index</option>
+            <option value="R_10">Volatility 10 Index</option>
+            <option value="1HZ100V">1-Second Volatility 100</option>
+            <option value="1HZ50V">1-Second Volatility 50</option>
+        </select>
+
+        <div class="btn-group">
+            <button class="btn-start" onclick="startAnalysis()">Start Engine</button>
+            <button class="btn-stop" onclick="stopAnalysis()">Stop Engine</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
+            <span id="statusBadge" class="status-badge">Idle</span>
+            <span id="sampleStatus" style="font-size: 12px; color: var(--text-muted);">Buffer: 0/100</span>
+        </div>
+
+        <label>Live Digit Hit Rankings (0 - 9)</label>
+        <div class="ranking-grid" id="rankingGrid">
+            <!-- Dynamically populated via script -->
+        </div>
+
+        <div class="log-box" id="logBox">[System] App ready. Click start...</div>
+    </div>
+
+<script>
+let ws = null;
+let recentDigits = [];
+const SAMPLE_SIZE = 100;
+let isAnalyzing = false;
+
+function log(msg) {
+    const box = document.getElementById('logBox');
+    box.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+    box.scrollTop = box.scrollHeight;
+}
+
+function updateDashboard() {
+    if (recentDigits.length === 0) return;
+
+    let counts = Array(10).fill(0);
+    recentDigits.forEach(d => counts[d]++);
+
+    // Create array of objects {digit, count, percentage} and sort highest to lowest
+    let stats = counts.map((count, digit) => ({
+        digit: digit,
+        count: count,
+        percentage: (count / recentDigits.length) * 100
+    })).sort((a, b) => b.percentage - a.percentage);
+
+    let gridHtml = '';
+    stats.forEach((item, index) => {
+        let isHot = item.percentage >= 13.0; // Highlight if high probability surge
+        gridHtml += `
+            <div class="rank-item ${isHot ? 'hot' : ''}">
+                <div>
+                    <span class="digit-num">#${item.digit}</span>
+                    <span style="font-size:10px; color:var(--text-muted); display:block;">Rank ${index+1}</span>
+                </div>
+                <div class="digit-pct">${item.percentage.toFixed(1)}%</div>
+            </div>
+        `;
+    });
+
+    document.getElementById('rankingGrid').innerHTML = gridHtml;
+    document.getElementById('sampleStatus').innerText = `Buffer Window: ${recentDigits.length}/${SAMPLE_SIZE} ticks`;
+}
+
+function startAnalysis() {
+    if (isAnalyzing) return;
+    const symbol = document.getElementById('symbol').value;
+    recentDigits = [];
+    isAnalyzing = true;
+
+    const badge = document.getElementById('statusBadge');
+    badge.innerText = "Syncing History";
+    badge.style.background = "#eab308";
+    log(`Connecting to secure feed for ${symbol}...`);
+
+    ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
+
+    ws.onopen = () => {
+        ws.send(JSON.stringify({
+            ticks_history: symbol,
+            adjust_start_time: 1,
+            count: SAMPLE_SIZE,
+            end: "latest",
+            start: 1,
+            style: "ticks",
+            req_id: 1
+        }));
+    };
+
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.msg_type === 'history' && data.history && data.history.prices) {
+            recentDigits = data.history.prices.map(price => parseInt(String(price).slice(-1)));
+            badge.innerText = "Live Streaming";
+            badge.style.background = "#10b981";
+            log(`Loaded ${recentDigits.length} historical ticks. Real-time active.`);
+            updateDashboard();
+
+            ws.send(JSON.stringify({
+                ticks: symbol,
+                subscribe: 1,
+                req_id: 2
+            }));
+        }
+
+        if (data.msg_type === 'tick' && data.tick) {
+            const lastDigit = parseInt(String(data.tick.quote).slice(-1));
+            recentDigits.push(lastDigit);
+            if (recentDigits.length > SAMPLE_SIZE) recentDigits.shift();
+            updateDashboard();
+        }
+    };
+
+    ws.onclose = () => {
+        if (isAnalyzing) {
+            log("Connection dropped. Reconnecting...");
+            setTimeout(startAnalysis, 1500);
+        }
+    };
+}
+
+function stopAnalysis() {
+    isAnalyzing = false;
+    if (ws) ws.close();
+    document.getElementById('statusBadge').innerText = "Idle";
+    document.getElementById('statusBadge').style.background = "#334155";
+    log("Engine stopped.");
+}
+</script>
+
+</body>
+</html>
